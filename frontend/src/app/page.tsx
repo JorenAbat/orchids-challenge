@@ -3,6 +3,7 @@
 
 // Import useState for managing component state
 import { useState } from 'react';
+import Link from 'next/link';
 
 // Helper to extract domain from URL
 function getDomain(url: string) {
@@ -13,6 +14,13 @@ function getDomain(url: string) {
   }
 }
 
+interface CloneMetadata {
+  id: string;
+  url: string;
+  timestamp: string;
+  filename: string;
+}
+
 // Main component for the website cloning interface
 export default function Home() {
   // State management for the component:
@@ -20,10 +28,15 @@ export default function Home() {
   // loading: tracks the cloning process status
   // preview: stores the generated HTML
   // error: stores any error messages
+  // isEditing: tracks whether we're in edit mode
+  // metadata: stores the clone metadata
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedHtml, setEditedHtml] = useState<string | null>(null);
+  const [metadata, setMetadata] = useState<CloneMetadata | null>(null);
 
   // Handles form submission when user requests website cloning
   const handleSubmit = async (e: React.FormEvent) => {
@@ -36,6 +49,7 @@ export default function Home() {
     setLoading(true);
     setError(null);
     setPreview(null);
+    setMetadata(null);
     try {
       const response = await fetch('http://localhost:8000/clone', {
         method: 'POST',
@@ -49,6 +63,7 @@ export default function Home() {
       }
       const data = await response.json();
       setPreview(data.html);
+      setMetadata(data.metadata);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
@@ -68,6 +83,21 @@ export default function Home() {
     setUrl('');
     setPreview(null);
     setError(null);
+    setMetadata(null);
+  };
+
+  // Handle HTML editing
+  const handleEdit = () => {
+    setIsEditing(true);
+    setEditedHtml(preview);
+  };
+
+  // Handle saving edited HTML
+  const handleSave = () => {
+    if (editedHtml) {
+      setPreview(editedHtml);
+      setIsEditing(false);
+    }
   };
 
   // Component UI structure
@@ -76,8 +106,16 @@ export default function Home() {
     <div className="min-h-screen p-8">
       {/* Content wrapper with max width */}
       <main className="mx-auto">
-        {/* Application title */}
-        <h1 className="text-3xl font-bold mb-8 text-center">Website Cloner</h1>
+        {/* Application title and navigation */}
+        <div className="flex justify-between items-center mb-8">
+          <h1 className="text-3xl font-bold">Website Cloner</h1>
+          <Link 
+            href="/history"
+            className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
+          >
+            View History
+          </Link>
+        </div>
         
         {/* URL input form */}
         <form onSubmit={handleSubmit} className="mb-8 flex justify-center">
@@ -85,20 +123,19 @@ export default function Home() {
           <div className="flex gap-4 w-full max-w-xl">
             {/* URL input field */}
             <input
-              type="url" // Enforces valid URL format
-              value={url} // Controlled input
-              onChange={(e) => setUrl(e.target.value)} // Update state on change
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
               placeholder="Enter website URL (e.g., https://example.com)"
               className="flex-1 p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-md"
-              required // Form validation
+              required
             />
             {/* Submit button */}
             <button
               type="submit"
-              disabled={loading} // Prevent multiple submissions
+              disabled={loading}
               className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:bg-blue-300 disabled:cursor-not-allowed"
             >
-              {/* Dynamic button text */}
               {loading ? 'Cloning...' : 'Clone Website'}
             </button>
             <button
@@ -121,12 +158,11 @@ export default function Home() {
         {/* Loading indicator */}
         {loading && (
           <div className="flex justify-center items-center h-64">
-            {/* Loading spinner */}
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
           </div>
         )}
 
-        {/* Preview section */}
+        {/* Preview/Edit section */}
         {preview && (
           <div
             className="border rounded-lg p-4 flex flex-col items-center mx-auto"
@@ -141,21 +177,65 @@ export default function Home() {
             }}
           >
             <h2 className="text-xl font-semibold mb-4 text-white">
-              Preview{url ? ` of ${getDomain(url)} clone` : ''}
+              {isEditing ? 'Edit HTML' : `Preview${url ? ` of ${getDomain(url)} clone` : ''}`}
             </h2>
             <div className="flex gap-4 mb-4">
-              <button
-                onClick={handleCopy}
-                className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
-              >
-                Copy HTML
-              </button>
+              {!isEditing ? (
+                <>
+                  <button
+                    onClick={handleCopy}
+                    className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+                  >
+                    Copy HTML
+                  </button>
+                  <button
+                    onClick={handleEdit}
+                    className="px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600"
+                  >
+                    Edit HTML
+                  </button>
+                  {metadata && (
+                    <Link
+                      href={`/preview/${metadata.filename}`}
+                      target="_blank"
+                      className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+                    >
+                      View in History
+                    </Link>
+                  )}
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={handleSave}
+                    className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+                  >
+                    Save Changes
+                  </button>
+                  <button
+                    onClick={() => setIsEditing(false)}
+                    className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+                  >
+                    Cancel
+                  </button>
+                </>
+              )}
             </div>
             {/* Show loading spinner inside preview box if loading */}
             {loading ? (
               <div className="flex justify-center items-center h-full w-full">
                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
               </div>
+            ) : isEditing ? (
+              <textarea
+                value={editedHtml || ''}
+                onChange={(e) => setEditedHtml(e.target.value)}
+                className="w-full h-full p-4 font-mono text-sm bg-gray-900 text-white rounded-lg"
+                style={{
+                  resize: 'none',
+                  outline: 'none',
+                }}
+              />
             ) : (
               <iframe
                 srcDoc={preview}

@@ -9,6 +9,11 @@ from dotenv import load_dotenv  # Load environment variables
 import logging
 from urllib.parse import urlparse
 import re
+import json
+from datetime import datetime
+import uuid
+from pathlib import Path
+import asyncio
 
 # Initialize environment variables
 load_dotenv()
@@ -30,6 +35,10 @@ app.add_middleware(
     allow_methods=["*"],  # Allow all HTTP methods
     allow_headers=["*"],  # Allow all headers
 )
+
+# Create clones directory if it doesn't exist
+CLONES_DIR = Path("clones")
+CLONES_DIR.mkdir(exist_ok=True)
 
 # Input validation model
 class URLInput(BaseModel):
@@ -53,42 +62,44 @@ def is_valid_url(url):
         return False
     return True
 
-async def scrape_website(url: str) -> dict:
+SCRAPING_ERROR_LOG = Path("scraping_errors.log")
+
+async def scrape_website(url: str, max_retries: int = 3, timeout: int = 20) -> dict:
     """
-    Scrapes website content and styling.
+    Scrapes website content and styling with retry and timeout logic.
     Uses Playwright for JavaScript rendering support.
+    Logs errors to a file.
     """
-    try:
-        async with async_playwright() as p:
-            # Initialize browser
-            browser = await p.chromium.launch()
-            page = await browser.new_page()
-            
-            # Navigate to target URL
-            await page.goto(url)
-            
-            # Extract page content
-            content = await page.content()
-            
-            # Extract styling information
-            styles = await page.evaluate("""() => {
-                const styles = {};
-                // Extract computed styles
-                const bodyStyles = window.getComputedStyle(document.body);
-                styles.backgroundColor = bodyStyles.backgroundColor;
-                styles.color = bodyStyles.color;
-                styles.fontFamily = bodyStyles.fontFamily;
-                return styles;
-            }""")
-            
-            await browser.close()
-            return {
-                "content": content,
-                "styles": styles
-            }
-    except Exception as e:
-        # Handle scraping errors
-        raise HTTPException(status_code=500, detail=f"Error scraping website: {str(e)}")
+    last_exception = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            async def do_scrape():
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch()
+                    page = await browser.new_page()
+                    await page.goto(url)
+                    content = await page.content()
+                    styles = await page.evaluate("""() => {
+                        const styles = {};
+                        const bodyStyles = window.getComputedStyle(document.body);
+                        styles.backgroundColor = bodyStyles.backgroundColor;
+                        styles.color = bodyStyles.color;
+                        styles.fontFamily = bodyStyles.fontFamily;
+                        return styles;
+                    }""")
+                    await browser.close()
+                    return {"content": content, "styles": styles}
+            # Add timeout
+            return await asyncio.wait_for(do_scrape(), timeout=timeout)
+        except Exception as e:
+            last_exception = e
+            # Log error
+            with open(SCRAPING_ERROR_LOG, "a", encoding="utf-8") as logf:
+                logf.write(f"[{datetime.now().isoformat()}] Attempt {attempt} failed for {url}: {str(e)}\n")
+            if attempt < max_retries:
+                await asyncio.sleep(1)  # brief pause before retry
+    # If all retries failed
+    raise HTTPException(status_code=502, detail="Failed to scrape the website after several attempts. The site may be blocking bots, too slow, or unavailable.")
 
 # Robust HTML extraction from AI response
 def extract_html_from_ai_response(text):
@@ -129,6 +140,36 @@ def generate_clone(content: dict) -> str:
         # Handle AI generation errors
         raise HTTPException(status_code=500, detail=f"Error generating clone: {str(e)}")
 
+def save_clone(url: str, html: str) -> dict:
+    """Save the cloned website to a file and return metadata"""
+    try:
+        # Generate unique ID and filename
+        clone_id = str(uuid.uuid4())
+        filename = f"{clone_id}.html"
+        filepath = CLONES_DIR / filename
+        
+        # Save HTML file
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(html)
+        
+        # Create metadata
+        metadata = {
+            "id": clone_id,
+            "url": url,
+            "timestamp": datetime.now().isoformat(),
+            "filename": filename
+        }
+        
+        # Save metadata
+        metadata_path = CLONES_DIR / f"{clone_id}.json"
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f)
+        
+        return metadata
+    except Exception as e:
+        logging.error(f"Error saving clone: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save clone")
+
 @app.post("/clone")
 async def clone_website(url_input: URLInput):
     if not is_valid_url(url_input.url):
@@ -142,13 +183,75 @@ async def clone_website(url_input: URLInput):
         # Limit HTML size (e.g., 1MB)
         if len(clone.encode('utf-8')) > 1_000_000:
             raise HTTPException(status_code=413, detail="Generated HTML is too large.")
-        # Return result
-        return {"html": clone}
+        
+        # Save clone and get metadata
+        metadata = save_clone(url_input.url, clone)
+        
+        # Return result with metadata
+        return {"html": clone, "metadata": metadata}
     except HTTPException:
         raise
     except Exception as e:
         logging.error(f"Error in /clone: {e}")
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
+
+@app.get("/history")
+async def get_history():
+    """Get list of all cloned websites"""
+    try:
+        history = []
+        # Read all JSON metadata files
+        for metadata_file in CLONES_DIR.glob("*.json"):
+            try:
+                with open(metadata_file, "r", encoding="utf-8") as f:
+                    metadata = json.load(f)
+                    history.append(metadata)
+            except Exception as e:
+                logging.error(f"Error reading metadata file {metadata_file}: {e}")
+                continue
+        
+        # Sort by timestamp, newest first
+        history.sort(key=lambda x: x["timestamp"], reverse=True)
+        return history
+    except Exception as e:
+        logging.error(f"Error getting history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get history")
+
+@app.get("/preview/{filename}")
+async def preview_clone(filename: str):
+    """Get the HTML content of a cloned website"""
+    try:
+        filepath = CLONES_DIR / filename
+        if not filepath.exists():
+            raise HTTPException(status_code=404, detail="Clone not found")
+        
+        with open(filepath, "r", encoding="utf-8") as f:
+            html = f.read()
+        
+        return {"html": html}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error previewing clone: {e}")
+        raise HTTPException(status_code=500, detail="Failed to preview clone")
+
+@app.get("/download/{filename}")
+async def download_clone(filename: str):
+    """Download a cloned website"""
+    try:
+        filepath = CLONES_DIR / filename
+        if not filepath.exists():
+            raise HTTPException(status_code=404, detail="Clone not found")
+        
+        with open(filepath, "r", encoding="utf-8") as f:
+            html = f.read()
+        
+        return {"html": html}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error downloading clone: {e}")
+        raise HTTPException(status_code=500, detail="Failed to download clone")
 
 @app.get("/")
 async def read_root():
