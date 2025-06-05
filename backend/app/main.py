@@ -95,6 +95,11 @@ async def scrape_website(url: str, max_retries: int = 3, timeout: int = 20) -> d
                     page = await browser.new_page()
                     logger.info("Navigating to page...")
                     await page.goto(url)
+                    # Start CSS coverage using CDP
+                    client = await page.context.new_cdp_session(page)
+                    await client.send('DOM.enable')
+                    await client.send('CSS.enable')
+                    await client.send('CSS.startRuleUsageTracking')
                     logger.info("Extracting above-the-fold content and critical CSS...")
                     # Get only the HTML for the visible viewport (above-the-fold)
                     above_fold_html = await page.evaluate('''() => {
@@ -125,32 +130,40 @@ async def scrape_website(url: str, max_retries: int = 3, timeout: int = 20) -> d
                             height: img.getAttribute('height')
                         }));
                     }''')
-                    # Extract all <style> blocks and <link rel="stylesheet"> hrefs
-                    style_and_links = await page.evaluate('''() => {
-                        const styles = Array.from(document.querySelectorAll('style')).map(s => s.innerHTML);
-                        const links = Array.from(document.querySelectorAll('link[rel="stylesheet"]')).map(l => l.href);
-                        return {styles, links};
-                    }''')
-                    inline_css = '\n'.join(style_and_links['styles'])
-                    css_links = style_and_links['links']
-                    # Fetch linked CSS in Python
-                    linked_css = []
-                    async with aiohttp.ClientSession() as session:
-                        for href in css_links:
-                            try:
-                                async with session.get(href, timeout=10) as resp:
-                                    if resp.status == 200:
-                                        css_text = await resp.text()
-                                        linked_css.append(css_text)
-                            except Exception as e:
-                                logger.warning(f"Failed to fetch CSS from {href}: {e}")
-                    all_css = DEFAULT_IMG_CSS + inline_css + '\n' + '\n'.join(linked_css)
+                    # Stop CSS coverage and get rule usage
+                    rule_usage = await client.send('CSS.stopRuleUsageTracking')
+                    # Collect all unique styleSheetIds from ruleUsage
+                    used_sheet_ids = set()
+                    for usage in rule_usage.get('ruleUsage', []):
+                        if usage.get('used', False):
+                            style_sheet_id = usage.get('styleSheetId')
+                            if style_sheet_id:
+                                used_sheet_ids.add(style_sheet_id)
+                    # Fetch stylesheet text only for used styleSheetIds
+                    stylesheet_texts = {}
+                    for sheet_id in used_sheet_ids:
+                        try:
+                            text_result = await client.send('CSS.getStyleSheetText', {'styleSheetId': sheet_id})
+                            stylesheet_texts[sheet_id] = text_result.get('text', '')
+                        except Exception as e:
+                            logger.warning(f"Failed to fetch stylesheet text for {sheet_id}: {e}")
+                    # Collect only the used CSS rules
+                    used_css = ''
+                    for usage in rule_usage.get('ruleUsage', []):
+                        if usage.get('used', False):
+                            style_sheet_id = usage.get('styleSheetId')
+                            start_offset = usage.get('startOffset')
+                            end_offset = usage.get('endOffset')
+                            css_text = stylesheet_texts.get(style_sheet_id, '')
+                            used_css += css_text[start_offset:end_offset] + '\n'
+                    # Add default image CSS for safety
+                    all_css = DEFAULT_IMG_CSS + used_css
                     # Truncate CSS to sensible length
                     if len(all_css) > MAX_CSS_LENGTH:
                         logger.info(f"Truncating CSS from {len(all_css)} to {MAX_CSS_LENGTH} characters.")
                         all_css = all_css[:MAX_CSS_LENGTH]
                     await browser.close()
-                    logger.info("Successfully scraped above-the-fold content and truncated critical CSS")
+                    logger.info("Successfully scraped above-the-fold content and used CSS via CDP")
                     # Update HTML to use absolute image URLs and preserve width/height
                     soup = BeautifulSoup(above_fold_html, 'html.parser')
                     for img in soup.find_all('img'):
