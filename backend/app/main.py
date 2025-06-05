@@ -7,7 +7,7 @@ import google.generativeai as genai  # AI model integration
 import os  # Environment variables
 from dotenv import load_dotenv  # Load environment variables
 import logging
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 import re
 import json
 from datetime import datetime
@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path
 import asyncio
 import aiohttp
+from bs4 import BeautifulSoup
 
 # Initialize environment variables
 load_dotenv()
@@ -76,12 +77,14 @@ SCRAPING_ERROR_LOG = Path("scraping_errors.log")
 async def scrape_website(url: str, max_retries: int = 3, timeout: int = 20) -> dict:
     """
     Scrapes above-the-fold website content and critical CSS (truncated) with retry and timeout logic.
+    Preserves real <img src> links as absolute URLs in the HTML, and constrains image size.
     Uses Playwright for JavaScript rendering support.
     Logs errors to a file.
     """
     logger.info(f"Starting website scraping for URL: {url}")
     last_exception = None
     MAX_CSS_LENGTH = 10000  # Sensible default for CSS length
+    DEFAULT_IMG_CSS = 'img { max-width: 100%; height: auto; }\n'
     for attempt in range(1, max_retries + 1):
         try:
             logger.info(f"Scraping attempt {attempt}/{max_retries}")
@@ -114,6 +117,14 @@ async def scrape_website(url: str, max_retries: int = 3, timeout: int = 20) -> d
                         removeBelowFold(clone);
                         return clone.innerHTML;
                     }''')
+                    # Extract all <img> src attributes
+                    img_srcs = await page.evaluate('''() => {
+                        return Array.from(document.images).map(img => ({
+                            src: img.getAttribute('src'),
+                            width: img.getAttribute('width'),
+                            height: img.getAttribute('height')
+                        }));
+                    }''')
                     # Extract all <style> blocks and <link rel="stylesheet"> hrefs
                     style_and_links = await page.evaluate('''() => {
                         const styles = Array.from(document.querySelectorAll('style')).map(s => s.innerHTML);
@@ -133,14 +144,30 @@ async def scrape_website(url: str, max_retries: int = 3, timeout: int = 20) -> d
                                         linked_css.append(css_text)
                             except Exception as e:
                                 logger.warning(f"Failed to fetch CSS from {href}: {e}")
-                    all_css = inline_css + '\n' + '\n'.join(linked_css)
+                    all_css = DEFAULT_IMG_CSS + inline_css + '\n' + '\n'.join(linked_css)
                     # Truncate CSS to sensible length
                     if len(all_css) > MAX_CSS_LENGTH:
                         logger.info(f"Truncating CSS from {len(all_css)} to {MAX_CSS_LENGTH} characters.")
                         all_css = all_css[:MAX_CSS_LENGTH]
                     await browser.close()
                     logger.info("Successfully scraped above-the-fold content and truncated critical CSS")
-                    return {"content": above_fold_html, "styles": all_css}
+                    # Update HTML to use absolute image URLs and preserve width/height
+                    soup = BeautifulSoup(above_fold_html, 'html.parser')
+                    for img in soup.find_all('img'):
+                        src = img.get('src')
+                        if src:
+                            abs_src = urljoin(url, src)
+                            img['src'] = abs_src
+                        # Try to preserve width/height if present in original page
+                        for img_info in img_srcs:
+                            if img_info['src'] == src:
+                                if img_info['width']:
+                                    img['width'] = img_info['width']
+                                if img_info['height']:
+                                    img['height'] = img_info['height']
+                                break
+                    updated_html = str(soup)
+                    return {"content": updated_html, "styles": all_css}
             # Add timeout
             return await asyncio.wait_for(do_scrape(), timeout=timeout)
         except Exception as e:
