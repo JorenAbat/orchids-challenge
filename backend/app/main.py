@@ -14,9 +14,18 @@ from datetime import datetime
 import uuid
 from pathlib import Path
 import asyncio
+import aiohttp
 
 # Initialize environment variables
 load_dotenv()
+
+# Configure logging with more detailed format
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 # Configure Gemini AI model
 # Using the latest model for optimal performance
@@ -66,39 +75,85 @@ SCRAPING_ERROR_LOG = Path("scraping_errors.log")
 
 async def scrape_website(url: str, max_retries: int = 3, timeout: int = 20) -> dict:
     """
-    Scrapes website content and styling with retry and timeout logic.
+    Scrapes above-the-fold website content and critical CSS (truncated) with retry and timeout logic.
     Uses Playwright for JavaScript rendering support.
     Logs errors to a file.
     """
+    logger.info(f"Starting website scraping for URL: {url}")
     last_exception = None
+    MAX_CSS_LENGTH = 10000  # Sensible default for CSS length
     for attempt in range(1, max_retries + 1):
         try:
+            logger.info(f"Scraping attempt {attempt}/{max_retries}")
             async def do_scrape():
+                logger.info("Launching browser...")
                 async with async_playwright() as p:
                     browser = await p.chromium.launch()
                     page = await browser.new_page()
+                    logger.info("Navigating to page...")
                     await page.goto(url)
-                    content = await page.content()
-                    styles = await page.evaluate("""() => {
-                        const styles = {};
-                        const bodyStyles = window.getComputedStyle(document.body);
-                        styles.backgroundColor = bodyStyles.backgroundColor;
-                        styles.color = bodyStyles.color;
-                        styles.fontFamily = bodyStyles.fontFamily;
-                        return styles;
-                    }""")
+                    logger.info("Extracting above-the-fold content and critical CSS...")
+                    # Get only the HTML for the visible viewport (above-the-fold)
+                    above_fold_html = await page.evaluate('''() => {
+                        const body = document.body;
+                        const html = document.documentElement;
+                        const viewportHeight = window.innerHeight;
+                        // Clone the body and remove elements below the fold
+                        const clone = body.cloneNode(true);
+                        function removeBelowFold(node) {
+                            if (!node.getBoundingClientRect) return;
+                            const rect = node.getBoundingClientRect();
+                            if (rect.top > viewportHeight) {
+                                node.remove();
+                                return;
+                            }
+                            for (let child of Array.from(node.children)) {
+                                removeBelowFold(child);
+                            }
+                        }
+                        removeBelowFold(clone);
+                        return clone.innerHTML;
+                    }''')
+                    # Extract all <style> blocks and <link rel="stylesheet"> hrefs
+                    style_and_links = await page.evaluate('''() => {
+                        const styles = Array.from(document.querySelectorAll('style')).map(s => s.innerHTML);
+                        const links = Array.from(document.querySelectorAll('link[rel="stylesheet"]')).map(l => l.href);
+                        return {styles, links};
+                    }''')
+                    inline_css = '\n'.join(style_and_links['styles'])
+                    css_links = style_and_links['links']
+                    # Fetch linked CSS in Python
+                    linked_css = []
+                    async with aiohttp.ClientSession() as session:
+                        for href in css_links:
+                            try:
+                                async with session.get(href, timeout=10) as resp:
+                                    if resp.status == 200:
+                                        css_text = await resp.text()
+                                        linked_css.append(css_text)
+                            except Exception as e:
+                                logger.warning(f"Failed to fetch CSS from {href}: {e}")
+                    all_css = inline_css + '\n' + '\n'.join(linked_css)
+                    # Truncate CSS to sensible length
+                    if len(all_css) > MAX_CSS_LENGTH:
+                        logger.info(f"Truncating CSS from {len(all_css)} to {MAX_CSS_LENGTH} characters.")
+                        all_css = all_css[:MAX_CSS_LENGTH]
                     await browser.close()
-                    return {"content": content, "styles": styles}
+                    logger.info("Successfully scraped above-the-fold content and truncated critical CSS")
+                    return {"content": above_fold_html, "styles": all_css}
             # Add timeout
             return await asyncio.wait_for(do_scrape(), timeout=timeout)
         except Exception as e:
             last_exception = e
+            logger.error(f"Scraping attempt {attempt} failed: {str(e)}")
             # Log error
             with open(SCRAPING_ERROR_LOG, "a", encoding="utf-8") as logf:
                 logf.write(f"[{datetime.now().isoformat()}] Attempt {attempt} failed for {url}: {str(e)}\n")
             if attempt < max_retries:
+                logger.info(f"Waiting before retry...")
                 await asyncio.sleep(1)  # brief pause before retry
     # If all retries failed
+    logger.error("All scraping attempts failed")
     raise HTTPException(status_code=502, detail="Failed to scrape the website after several attempts. The site may be blocking bots, too slow, or unavailable.")
 
 # Robust HTML extraction from AI response
@@ -117,37 +172,109 @@ def extract_html_from_ai_response(text):
             html = text
     return html.strip()
 
-def generate_clone(content: dict) -> str:
+def truncate_css(css: str, max_length: int = 10000) -> str:
+    """Truncate CSS to a sensible length if needed."""
+    if len(css) > max_length:
+        logger.info(f"Truncating CSS from {len(css)} to {max_length} characters.")
+        return css[:max_length]
+    return css
+
+def generate_clone(content: dict, truncate_css_flag: bool = False) -> str:
     """
     Generates website clone using Gemini AI.
     Processes scraped content and styles to create a similar website.
+    Tries with full CSS first, and on quota/token error, retries with truncated CSS.
     """
     try:
-        # Prepare AI prompt
+        logger.info("Starting AI clone generation...")
+        css = content['styles']
+        if truncate_css_flag:
+            css = truncate_css(css)
+        # Prepare AI prompt with specific instructions about styling
         prompt = f"""
         Create a similar-looking website based on this content and styling:
         Content: {content['content']}
-        Styles: {content['styles']}
+        Styles: {css}
         
         Generate only the HTML code that recreates this website's look and feel.
-        Keep the same color scheme, layout, and overall design.
+        Follow these specific guidelines:
+        1. Keep the same color scheme, layout, and overall design
+        2. DO NOT use base64 encoded images - use placeholder images or relative URLs instead
+        3. Use standard web-safe fonts if the original font is not available
+        4. Keep CSS simple and avoid complex transformations
+        5. Use semantic HTML elements where possible
+        6. Ensure all styles are properly closed and valid
+        7. If you need to include images, use placeholder.com or similar services
+        8. Keep the HTML structure clean and well-formatted
+        9. Avoid inline styles where possible - use a style tag instead
+        10. Make sure all CSS properties are valid and properly formatted
+        
+        Return only the HTML code with embedded CSS.
         """
+        logger.info("Sending request to Gemini AI...")
         # Generate clone using AI
         response = model.generate_content(prompt)
+        logger.info("Received response from Gemini AI")
         html = extract_html_from_ai_response(response.text)
+        
+        # Validate and clean up the HTML
+        html = clean_generated_html(html)
+        
+        logger.info("Successfully extracted and cleaned HTML from AI response")
         return html
     except Exception as e:
+        # Check for quota/token error and retry with truncated CSS
+        error_message = str(e)
+        if (not truncate_css_flag) and ("quota" in error_message.lower() or "token" in error_message.lower() or "429" in error_message):
+            logger.warning("Quota/token error detected. Retrying with truncated CSS.")
+            return generate_clone(content, truncate_css_flag=True)
+        logger.error(f"Error in AI clone generation: {error_message}")
         # Handle AI generation errors
-        raise HTTPException(status_code=500, detail=f"Error generating clone: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error generating clone: {error_message}")
+
+def clean_generated_html(html: str) -> str:
+    """
+    Cleans and validates the generated HTML to ensure it's properly formatted
+    and doesn't contain broken elements.
+    """
+    try:
+        # Remove any broken base64 images
+        html = re.sub(r'url\([\'"]?data:image[^)]+\)', 'url("https://via.placeholder.com/150")', html)
+        
+        # Remove any extremely long strings (likely broken base64)
+        html = re.sub(r'[A-Za-z0-9+/]{1000,}', '', html)
+        
+        # Ensure style tags are properly closed
+        html = re.sub(r'<style[^>]*>(?!.*</style>)', '<style>', html)
+        
+        # Remove any invalid CSS properties
+        invalid_props = [
+            r'background-image:\s*url\([^)]{1000,}\)',
+            r'content:\s*url\([^)]{1000,}\)',
+            r'url\([^)]{1000,}\)'
+        ]
+        for prop in invalid_props:
+            html = re.sub(prop, '', html)
+        
+        # Ensure all quotes are properly closed
+        html = re.sub(r'([^\\])"([^"]*?)(?<!\\)"', r'\1"\2"', html)
+        html = re.sub(r"([^\\])'([^']*?)(?<!\\)'", r"\1'\2'", html)
+        
+        return html
+    except Exception as e:
+        logger.error(f"Error cleaning HTML: {str(e)}")
+        return html  # Return original HTML if cleaning fails
 
 def save_clone(url: str, html: str) -> dict:
     """Save the cloned website to a file and return metadata"""
     try:
+        logger.info("Starting clone save process...")
         # Generate unique ID and filename
         clone_id = str(uuid.uuid4())
         filename = f"{clone_id}.html"
         filepath = CLONES_DIR / filename
         
+        logger.info(f"Saving HTML file: {filename}")
         # Save HTML file
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(html)
@@ -160,39 +287,49 @@ def save_clone(url: str, html: str) -> dict:
             "filename": filename
         }
         
+        logger.info("Saving metadata...")
         # Save metadata
         metadata_path = CLONES_DIR / f"{clone_id}.json"
         with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f)
         
+        logger.info("Clone saved successfully")
         return metadata
     except Exception as e:
-        logging.error(f"Error saving clone: {e}")
+        logger.error(f"Error saving clone: {e}")
         raise HTTPException(status_code=500, detail="Failed to save clone")
 
 @app.post("/clone")
 async def clone_website(url_input: URLInput):
+    logger.info(f"Received clone request for URL: {url_input.url}")
     if not is_valid_url(url_input.url):
+        logger.warning(f"Invalid URL provided: {url_input.url}")
         raise HTTPException(status_code=400, detail="Invalid or unsafe URL")
     try:
-        logging.info(f"Cloning website: {url_input.url}")
         # Scrape website content
+        logger.info("Starting website scraping phase...")
         content = await scrape_website(url_input.url)
+        
         # Generate clone
+        logger.info("Starting clone generation phase...")
         clone = generate_clone(content)
+        
         # Limit HTML size (e.g., 1MB)
         if len(clone.encode('utf-8')) > 1_000_000:
+            logger.warning("Generated HTML exceeds size limit")
             raise HTTPException(status_code=413, detail="Generated HTML is too large.")
         
         # Save clone and get metadata
+        logger.info("Starting clone save phase...")
         metadata = save_clone(url_input.url, clone)
         
+        logger.info("Clone process completed successfully")
         # Return result with metadata
         return {"html": clone, "metadata": metadata}
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"Error in /clone: {e}")
+        logger.error(f"Unexpected error in /clone: {e}")
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
 @app.get("/history")
