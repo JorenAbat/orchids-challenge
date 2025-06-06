@@ -36,12 +36,12 @@ export default function History() {
 
   return (
     <div className="min-h-screen p-8">
-      <main className="mx-auto max-w-4xl">
+      <main className="mx-auto">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-3xl font-bold">Clone History</h1>
           <Link 
             href="/"
-            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+            className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
           >
             Back to Cloner
           </Link>
@@ -62,36 +62,32 @@ export default function History() {
             <p className="text-gray-600">No clones in history yet.</p>
           </div>
         ) : (
-          <div className="space-y-4">
-            {history.map((item) => (
-              <div 
-                key={item.id}
-                className="p-4 bg-white rounded-lg shadow hover:shadow-md transition-shadow"
-              >
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h3 className="font-semibold text-lg text-black">{item.url}</h3>
-                    <p className="text-sm text-gray-500">
-                      Cloned on {new Date(item.timestamp).toLocaleString()}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => window.open(`/preview/${item.filename}`, '_blank')}
-                      className="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm"
-                    >
-                      View
-                    </button>
-                    <button
-                      onClick={() => window.open(`/download/${item.filename}`, '_blank')}
-                      className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 text-sm"
-                    >
-                      Download
-                    </button>
+          <div className="max-w-2xl mx-auto">
+            <div className="space-y-4">
+              {history.map((item) => (
+                <div 
+                  key={item.id}
+                  className="p-4 bg-white rounded-lg shadow hover:shadow-md transition-shadow"
+                >
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h3 className="font-semibold text-lg text-black">{item.url}</h3>
+                      <p className="text-sm text-gray-500">
+                        Cloned on {new Date(item.timestamp).toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Link
+                        href={`/preview/${item.filename}`}
+                        className="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm"
+                      >
+                        View
+                      </Link>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         )}
       </main>

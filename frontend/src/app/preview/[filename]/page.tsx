@@ -13,6 +13,8 @@ export default function Preview({ params }: PreviewProps) {
   const [html, setHtml] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedHtml, setEditedHtml] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchPreview = async () => {
@@ -23,6 +25,7 @@ export default function Preview({ params }: PreviewProps) {
         }
         const data = await response.json();
         setHtml(data.html);
+        setEditedHtml(data.html);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'An error occurred');
       } finally {
@@ -32,6 +35,23 @@ export default function Preview({ params }: PreviewProps) {
 
     fetchPreview();
   }, [filename]);
+
+  const handleCopy = () => {
+    if (html) {
+      navigator.clipboard.writeText(html);
+    }
+  };
+
+  const handleEdit = () => {
+    setIsEditing(true);
+  };
+
+  const handleSave = () => {
+    if (editedHtml) {
+      setHtml(editedHtml);
+      setIsEditing(false);
+    }
+  };
 
   return (
     <div className="min-h-screen p-8">
@@ -77,19 +97,67 @@ export default function Preview({ params }: PreviewProps) {
               justifyContent: 'center',
             }}
           >
-            <iframe
-              srcDoc={html}
-              title="Cloned Website Preview"
-              style={{
-                width: '100%',
-                height: '100%',
-                background: 'white',
-                borderRadius: '8px',
-                boxShadow: '0 2px 16px rgba(0,0,0,0.2)',
-                border: 'none',
-              }}
-              sandbox="allow-scripts allow-same-origin"
-            />
+            <h2 className="text-xl font-semibold mb-4 text-white">
+              {isEditing ? 'Edit HTML' : 'Preview'}
+            </h2>
+            <div className="flex gap-4 mb-4">
+              {!isEditing ? (
+                <>
+                  <button
+                    onClick={handleCopy}
+                    className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+                  >
+                    Copy HTML
+                  </button>
+                  <button
+                    onClick={handleEdit}
+                    className="px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600"
+                  >
+                    Edit HTML
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={handleSave}
+                    className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+                  >
+                    Save Changes
+                  </button>
+                  <button
+                    onClick={() => setIsEditing(false)}
+                    className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+                  >
+                    Cancel
+                  </button>
+                </>
+              )}
+            </div>
+            {isEditing ? (
+              <textarea
+                value={editedHtml || ''}
+                onChange={(e) => setEditedHtml(e.target.value)}
+                className="w-full h-full p-4 font-mono text-sm bg-gray-900 text-white rounded-lg"
+                style={{
+                  resize: 'none',
+                  outline: 'none',
+                }}
+              />
+            ) : (
+              <iframe
+                srcDoc={html}
+                title="Cloned Website Preview"
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  background: 'white',
+                  borderRadius: '8px',
+                  boxShadow: '0 2px 16px rgba(0,0,0,0.2)',
+                  border: 'none',
+                }}
+                sandbox="allow-scripts allow-same-origin"
+              />
+            )}
           </div>
         ) : (
           <div className="text-center p-8 bg-gray-50 rounded-lg">

@@ -217,21 +217,31 @@ def truncate_css(css: str, max_length: int = 10000) -> str:
         return css[:max_length]
     return css
 
-def generate_clone(content: dict, truncate_css_flag: bool = False) -> str:
+def truncate_content(content: str, max_length: int = 10000) -> str:
+    """Truncate HTML/content to a sensible length if needed."""
+    if len(content) > max_length:
+        logger.info(f"Truncating content from {len(content)} to {max_length} characters.")
+        return content[:max_length]
+    return content
+
+def generate_clone(content: dict, truncate_css_flag: bool = False, truncate_content_flag: bool = False) -> str:
     """
     Generates website clone using the configured LLM provider.
     Processes scraped content and styles to create a similar website.
-    Tries with full CSS first, and on quota/token error, retries with truncated CSS.
+    Tries with full CSS/content first, and on quota/token error, retries with truncated CSS/content.
     """
     try:
         logger.info("Starting AI clone generation...")
         css = content['styles']
+        html_content = content['content']
         if truncate_css_flag:
             css = truncate_css(css)
+        if truncate_content_flag:
+            html_content = truncate_content(html_content)
         # Prepare AI prompt with specific instructions about styling
         prompt = f"""
         Create a similar-looking website based on this content and styling:
-        Content: {content['content']}
+        Content: {html_content}
         Styles: {css}
         
         Generate only the HTML code that recreates this website's look and feel.
@@ -246,6 +256,7 @@ def generate_clone(content: dict, truncate_css_flag: bool = False) -> str:
         8. Avoid inline styles where possible - use a style tag instead
         9. Make sure all CSS properties are valid and properly formatted
         10. Maintain all original image dimensions (width/height attributes)
+        11. Do NOT use placeholder comments or generic content such as <!-- Original navigation items --> or <!-- Original slider/hero content -->. If you cannot reconstruct a section, OMIT IT entirely rather than using a placeholder.
         
         Return only the HTML code with embedded CSS.
         """
@@ -261,11 +272,11 @@ def generate_clone(content: dict, truncate_css_flag: bool = False) -> str:
         logger.info("Successfully extracted and cleaned HTML from AI response")
         return html
     except Exception as e:
-        # Check for quota/token error and retry with truncated CSS
+        # Check for quota/token error and retry with truncated CSS/content
         error_message = str(e)
-        if (not truncate_css_flag) and ("quota" in error_message.lower() or "token" in error_message.lower() or "429" in error_message):
-            logger.warning("Quota/token error detected. Retrying with truncated CSS.")
-            return generate_clone(content, truncate_css_flag=True)
+        if (not truncate_css_flag or not truncate_content_flag) and ("quota" in error_message.lower() or "token" in error_message.lower() or "429" in error_message):
+            logger.warning("Quota/token error detected. Retrying with truncated CSS and content.")
+            return generate_clone(content, truncate_css_flag=True, truncate_content_flag=True)
         logger.error(f"Error in AI clone generation: {error_message}")
         # Handle AI generation errors
         raise HTTPException(status_code=500, detail=f"Error generating clone: {error_message}")
