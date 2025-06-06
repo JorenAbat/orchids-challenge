@@ -3,7 +3,6 @@ from fastapi import FastAPI, HTTPException  # FastAPI for API framework, HTTPExc
 from fastapi.middleware.cors import CORSMiddleware  # Enable cross-origin requests
 from pydantic import BaseModel  # Data validation
 from playwright.async_api import async_playwright  # Website scraping
-import google.generativeai as genai  # AI model integration
 import os  # Environment variables
 from dotenv import load_dotenv  # Load environment variables
 import logging
@@ -16,6 +15,7 @@ from pathlib import Path
 import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
+from .llm_providers import get_llm_provider
 
 # Initialize environment variables
 load_dotenv()
@@ -28,10 +28,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configure Gemini AI model
-# Using the latest model for optimal performance
-genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
+# Initialize LLM provider
+llm_provider = get_llm_provider()
 
 # Initialize FastAPI application
 app = FastAPI()
@@ -221,7 +219,7 @@ def truncate_css(css: str, max_length: int = 10000) -> str:
 
 def generate_clone(content: dict, truncate_css_flag: bool = False) -> str:
     """
-    Generates website clone using Gemini AI.
+    Generates website clone using the configured LLM provider.
     Processes scraped content and styles to create a similar website.
     Tries with full CSS first, and on quota/token error, retries with truncated CSS.
     """
@@ -239,23 +237,23 @@ def generate_clone(content: dict, truncate_css_flag: bool = False) -> str:
         Generate only the HTML code that recreates this website's look and feel.
         Follow these specific guidelines:
         1. Keep the same color scheme, layout, and overall design
-        2. DO NOT use base64 encoded images - use placeholder images or relative URLs instead
+        2. PRESERVE ALL ORIGINAL IMAGE URLs - do not replace them with placeholders
         3. Use standard web-safe fonts if the original font is not available
         4. Keep CSS simple and avoid complex transformations
         5. Use semantic HTML elements where possible
         6. Ensure all styles are properly closed and valid
-        7. If you need to include images, use placeholder.com or similar services
-        8. Keep the HTML structure clean and well-formatted
-        9. Avoid inline styles where possible - use a style tag instead
-        10. Make sure all CSS properties are valid and properly formatted
+        7. Keep the HTML structure clean and well-formatted
+        8. Avoid inline styles where possible - use a style tag instead
+        9. Make sure all CSS properties are valid and properly formatted
+        10. Maintain all original image dimensions (width/height attributes)
         
         Return only the HTML code with embedded CSS.
         """
-        logger.info("Sending request to Gemini AI...")
+        logger.info(f"Sending request to {os.getenv('LLM_CHOICE', 'gemini').upper()} AI...")
         # Generate clone using AI
-        response = model.generate_content(prompt)
-        logger.info("Received response from Gemini AI")
-        html = extract_html_from_ai_response(response.text)
+        response = llm_provider.generate_content(prompt)
+        logger.info("Received response from AI")
+        html = extract_html_from_ai_response(response)
         
         # Validate and clean up the HTML
         html = clean_generated_html(html)
@@ -279,7 +277,7 @@ def clean_generated_html(html: str) -> str:
     """
     try:
         # Remove any broken base64 images
-        html = re.sub(r'url\([\'"]?data:image[^)]+\)', 'url("https://via.placeholder.com/150")', html)
+        html = re.sub(r'url\([\'"]?data:image[^)]+\)', '', html)
         
         # Remove any extremely long strings (likely broken base64)
         html = re.sub(r'[A-Za-z0-9+/]{1000,}', '', html)
