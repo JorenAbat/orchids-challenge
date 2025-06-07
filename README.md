@@ -24,34 +24,6 @@ After installing dependencies, you need to install Playwright browsers. Activate
 python -m playwright install
 ```
 
-### Running the Backend
-
-To run the backend development server, use the following command:
-
-```bash
-uv run fastapi dev
-```
-
-## Frontend
-
-The frontend is built with Next.js and TypeScript.
-
-### Installation
-
-To install the frontend dependencies, navigate to the frontend project directory and run:
-
-```bash
-npm install
-```
-
-### Running the Frontend
-
-To start the frontend development server, run:
-
-```bash
-npm run dev
-```
-
 ## Environment Variables & LLM Setup
 
 The backend requires a `.env` file in the `backend` directory to configure your Large Language Model (LLM) provider and API keys.
@@ -83,3 +55,31 @@ CLAUDE_API_KEY=your_claude_api_key_here
 
 ### 4. Restart the Backend
 After updating your `.env` file, restart the backend server for changes to take effect.
+
+### Running the Backend
+
+To run the backend development server, use the following command:
+
+```bash
+uv run fastapi dev
+```
+
+## Frontend
+
+The frontend is built with Next.js and TypeScript.
+
+### Installation
+
+To install the frontend dependencies, navigate to the frontend project directory and run:
+
+```bash
+npm install
+```
+
+### Running the Frontend
+
+To start the frontend development server, run:
+
+```bash
+npm run dev
+```
