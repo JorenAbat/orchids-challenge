@@ -1,85 +1,78 @@
-# Orchids SWE Intern Challenge Template
+# Orchids SWE Intern Challenge
 
-This project consists of a backend built with FastAPI and a frontend built with Next.js and TypeScript.
+This project consists of a backend built with FastAPI and a frontend built with Next.js and TypeScript. The application uses LLMs to clone websites as part of the Orchids SWE Intern challenge.
 
-## Backend
+## Prerequisites
 
-The backend uses `uv` for package management.
+- Python 3.11
+- Node.js 18 or higher
+- Git
 
-### Installation
+## Setup Instructions
 
-To install the backend dependencies, run the following command in the backend project directory:
+### Backend Setup
 
-```bash
-uv pip install -r requirements.txt
-```
+1. Navigate to the backend directory:
+   ```bash
+   cd backend
+   ```
 
-### First-time Setup for Playwright
+2. Create and activate a virtual environment:
+   ```bash
+   # Windows
+   python -m venv venv
+   .\venv\Scripts\activate
 
-After installing dependencies, you need to install Playwright browsers. Activate the virtual environment and run:
+   # macOS/Linux
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
 
-```bash
-# On Windows (PowerShell)
-.\.venv\Scripts\activate
-python -m playwright install
-```
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-## Environment Variables & LLM Setup
+4. Set up your environment variables:
+   - Create a `.env` file in the `backend` directory with the following content:
+     ```env
+     # Choose either 'gemini' or 'claude'
+     LLM_CHOICE=claude
+     GEMINI_API_KEY=your_gemini_api_key_here
+     CLAUDE_API_KEY=your_claude_api_key_here
+     ```
+   - Get your API keys:
+     - [Gemini API key](https://aistudio.google.com/app/apikey)
+     - [Claude API key](https://console.anthropic.com/settings/keys)
 
-The backend requires a `.env` file in the `backend` directory to configure your Large Language Model (LLM) provider and API keys.
+5. Start the backend server:
+   ```bash
+   uvicorn app.main:app --reload
+   ```
 
-### 1. Create a `.env` file in `backend/`
+### Frontend Setup
 
-Add the following variables:
+1. Open a new terminal and navigate to the frontend directory:
+   ```bash
+   cd frontend
+   ```
 
-```
-# Choose either 'gemini' or 'claude'
-LLM_CHOICE=claude
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
 
-# Your API keys (add at least the one for your chosen provider)
-GEMINI_API_KEY=your_gemini_api_key_here
-CLAUDE_API_KEY=your_claude_api_key_here
-```
+3. Start the development server:
+   ```bash
+   npm run dev
+   ```
 
-- `LLM_CHOICE`: Set to `gemini` (Google Gemini) or `claude` (Anthropic Claude) depending on which provider you want to use.
-- `GEMINI_API_KEY`: Your Google Gemini API key (required if using Gemini).
-- `CLAUDE_API_KEY`: Your Anthropic Claude API key (required if using Claude).
+## Features
 
-### 2. Get Your API Keys
-- **Gemini**: [Get a Gemini API key](https://aistudio.google.com/app/apikey)
-- **Claude**: [Get a Claude API key](https://console.anthropic.com/settings/keys)
+- Uses an LLM to make clones of websites
+- A history to see previous cloned websites
+- A way to easily copy or modify the cloned website
 
-### 3. Switching Providers
-- Change the value of `LLM_CHOICE` in your `.env` file to switch between Gemini and Claude.
-- Make sure the corresponding API key is present in your `.env` file.
+## License
 
-### 4. Restart the Backend
-After updating your `.env` file, restart the backend server for changes to take effect.
-
-### Running the Backend
-
-To run the backend development server, use the following command:
-
-```bash
-uv run fastapi dev
-```
-
-## Frontend
-
-The frontend is built with Next.js and TypeScript.
-
-### Installation
-
-To install the frontend dependencies, navigate to the frontend project directory and run:
-
-```bash
-npm install
-```
-
-### Running the Frontend
-
-To start the frontend development server, run:
-
-```bash
-npm run dev
-```
+This project is licensed under the MIT License.

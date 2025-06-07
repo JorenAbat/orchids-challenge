@@ -2,7 +2,6 @@
 from fastapi import FastAPI, HTTPException  # FastAPI for API framework, HTTPException for error handling
 from fastapi.middleware.cors import CORSMiddleware  # Enable cross-origin requests
 from pydantic import BaseModel  # Data validation
-from playwright.async_api import async_playwright  # Website scraping
 import os  # Environment variables
 from dotenv import load_dotenv  # Load environment variables
 import logging
@@ -74,113 +73,70 @@ SCRAPING_ERROR_LOG = Path("scraping_errors.log")
 
 async def scrape_website(url: str, max_retries: int = 3, timeout: int = 20) -> dict:
     """
-    Scrapes above-the-fold website content and critical CSS (truncated) with retry and timeout logic.
-    Preserves real <img src> links as absolute URLs in the HTML, and constrains image size.
-    Uses Playwright for JavaScript rendering support.
-    Logs errors to a file.
+    Scrapes website content and CSS using requests and BeautifulSoup.
+    Preserves real <img src> links as absolute URLs in the HTML.
     """
     logger.info(f"Starting website scraping for URL: {url}")
     last_exception = None
     MAX_CSS_LENGTH = 10000  # Sensible default for CSS length
     DEFAULT_IMG_CSS = 'img { max-width: 100%; height: auto; }\n'
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+
     for attempt in range(1, max_retries + 1):
         try:
             logger.info(f"Scraping attempt {attempt}/{max_retries}")
-            async def do_scrape():
-                logger.info("Launching browser...")
-                async with async_playwright() as p:
-                    browser = await p.chromium.launch()
-                    page = await browser.new_page()
-                    logger.info("Navigating to page...")
-                    await page.goto(url)
-                    # Start CSS coverage using CDP
-                    client = await page.context.new_cdp_session(page)
-                    await client.send('DOM.enable')
-                    await client.send('CSS.enable')
-                    await client.send('CSS.startRuleUsageTracking')
-                    logger.info("Extracting above-the-fold content and critical CSS...")
-                    # Get only the HTML for the visible viewport (above-the-fold)
-                    above_fold_html = await page.evaluate('''() => {
-                        const body = document.body;
-                        const html = document.documentElement;
-                        const viewportHeight = window.innerHeight;
-                        // Clone the body and remove elements below the fold
-                        const clone = body.cloneNode(true);
-                        function removeBelowFold(node) {
-                            if (!node.getBoundingClientRect) return;
-                            const rect = node.getBoundingClientRect();
-                            if (rect.top > viewportHeight) {
-                                node.remove();
-                                return;
-                            }
-                            for (let child of Array.from(node.children)) {
-                                removeBelowFold(child);
-                            }
-                        }
-                        removeBelowFold(clone);
-                        return clone.innerHTML;
-                    }''')
-                    # Extract all <img> src attributes
-                    img_srcs = await page.evaluate('''() => {
-                        return Array.from(document.images).map(img => ({
-                            src: img.getAttribute('src'),
-                            width: img.getAttribute('width'),
-                            height: img.getAttribute('height')
-                        }));
-                    }''')
-                    # Stop CSS coverage and get rule usage
-                    rule_usage = await client.send('CSS.stopRuleUsageTracking')
-                    # Collect all unique styleSheetIds from ruleUsage
-                    used_sheet_ids = set()
-                    for usage in rule_usage.get('ruleUsage', []):
-                        if usage.get('used', False):
-                            style_sheet_id = usage.get('styleSheetId')
-                            if style_sheet_id:
-                                used_sheet_ids.add(style_sheet_id)
-                    # Fetch stylesheet text only for used styleSheetIds
-                    stylesheet_texts = {}
-                    for sheet_id in used_sheet_ids:
-                        try:
-                            text_result = await client.send('CSS.getStyleSheetText', {'styleSheetId': sheet_id})
-                            stylesheet_texts[sheet_id] = text_result.get('text', '')
-                        except Exception as e:
-                            logger.warning(f"Failed to fetch stylesheet text for {sheet_id}: {e}")
-                    # Collect only the used CSS rules
-                    used_css = ''
-                    for usage in rule_usage.get('ruleUsage', []):
-                        if usage.get('used', False):
-                            style_sheet_id = usage.get('styleSheetId')
-                            start_offset = usage.get('startOffset')
-                            end_offset = usage.get('endOffset')
-                            css_text = stylesheet_texts.get(style_sheet_id, '')
-                            used_css += css_text[start_offset:end_offset] + '\n'
-                    # Add default image CSS for safety
-                    all_css = DEFAULT_IMG_CSS + used_css
-                    # Truncate CSS to sensible length
-                    if len(all_css) > MAX_CSS_LENGTH:
-                        logger.info(f"Truncating CSS from {len(all_css)} to {MAX_CSS_LENGTH} characters.")
-                        all_css = all_css[:MAX_CSS_LENGTH]
-                    await browser.close()
-                    logger.info("Successfully scraped above-the-fold content and used CSS via CDP")
-                    # Update HTML to use absolute image URLs and preserve width/height
-                    soup = BeautifulSoup(above_fold_html, 'html.parser')
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, timeout=timeout) as response:
+                    if response.status != 200:
+                        raise HTTPException(status_code=response.status, detail=f"Failed to fetch website: {response.status}")
+                    
+                    html_content = await response.text()
+                    soup = BeautifulSoup(html_content, 'html.parser')
+                    
+                    # Extract CSS from style tags
+                    css = DEFAULT_IMG_CSS
+                    for style in soup.find_all('style'):
+                        css += style.string + '\n' if style.string else ''
+                    
+                    # Extract CSS from link tags
+                    for link in soup.find_all('link', rel='stylesheet'):
+                        if link.get('href'):
+                            css_url = urljoin(url, link['href'])
+                            try:
+                                async with session.get(css_url, headers=headers) as css_response:
+                                    if css_response.status == 200:
+                                        css += await css_response.text() + '\n'
+                            except Exception as e:
+                                logger.warning(f"Failed to fetch CSS from {css_url}: {e}")
+                    
+                    # Update image URLs to absolute paths
                     for img in soup.find_all('img'):
                         src = img.get('src')
                         if src:
-                            abs_src = urljoin(url, src)
-                            img['src'] = abs_src
-                        # Try to preserve width/height if present in original page
-                        for img_info in img_srcs:
-                            if img_info['src'] == src:
-                                if img_info['width']:
-                                    img['width'] = img_info['width']
-                                if img_info['height']:
-                                    img['height'] = img_info['height']
-                                break
-                    updated_html = str(soup)
-                    return {"content": updated_html, "styles": all_css}
-            # Add timeout
-            return await asyncio.wait_for(do_scrape(), timeout=timeout)
+                            img['src'] = urljoin(url, src)
+                    
+                    # Get only the visible content (above the fold)
+                    body = soup.find('body')
+                    if body:
+                        # Remove elements that are likely below the fold
+                        for element in body.find_all(['script', 'style', 'noscript']):
+                            element.decompose()
+                        
+                        # Keep only the first few sections
+                        sections = body.find_all(['div', 'section', 'article'], recursive=False)
+                        for section in sections[3:]:  # Keep only first 3 major sections
+                            section.decompose()
+                    
+                    # Truncate CSS to sensible length
+                    if len(css) > MAX_CSS_LENGTH:
+                        logger.info(f"Truncating CSS from {len(css)} to {MAX_CSS_LENGTH} characters.")
+                        css = css[:MAX_CSS_LENGTH]
+                    
+                    return {"content": str(soup), "styles": css}
+                    
         except Exception as e:
             last_exception = e
             logger.error(f"Scraping attempt {attempt} failed: {str(e)}")
@@ -190,6 +146,7 @@ async def scrape_website(url: str, max_retries: int = 3, timeout: int = 20) -> d
             if attempt < max_retries:
                 logger.info(f"Waiting before retry...")
                 await asyncio.sleep(1)  # brief pause before retry
+    
     # If all retries failed
     logger.error("All scraping attempts failed")
     raise HTTPException(status_code=502, detail="Failed to scrape the website after several attempts. The site may be blocking bots, too slow, or unavailable.")
