@@ -7,6 +7,7 @@ This project consists of a backend built with FastAPI and a frontend built with 
 - Python 3.11
 - Node.js 18 or higher
 - Git
+- uv (Python package installer and resolver)
 
 ## Setup Instructions
 
@@ -17,20 +18,22 @@ This project consists of a backend built with FastAPI and a frontend built with 
    cd backend
    ```
 
-2. Create and activate a virtual environment:
+2. Create and activate a virtual environment using uv:
    ```bash
+   # Create virtual environment
+   uv venv
+
+   # Activate virtual environment
    # Windows
-   python -m venv venv
-   .\venv\Scripts\activate
+   .venv\Scripts\activate
 
    # macOS/Linux
-   python3 -m venv venv
-   source venv/bin/activate
+   source .venv/bin/activate
    ```
 
-3. Install dependencies:
+3. Install dependencies using uv:
    ```bash
-   pip install -r requirements.txt
+   uv pip install -r requirements.txt
    ```
 
 4. Set up your environment variables:
@@ -45,9 +48,9 @@ This project consists of a backend built with FastAPI and a frontend built with 
      - [Gemini API key](https://aistudio.google.com/app/apikey)
      - [Claude API key](https://console.anthropic.com/settings/keys)
 
-5. Start the backend server:
+5. Start the backend server using uv:
    ```bash
-   uvicorn app.main:app --reload
+   uv run uvicorn app.main:app --reload
    ```
 
 ### Frontend Setup
