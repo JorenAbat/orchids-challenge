@@ -50,7 +50,7 @@ This project consists of a backend built with FastAPI and a frontend built with 
 
 5. Start the backend server using uv:
    ```bash
-   uv run uvicorn app.main:app --reload
+   uv run fastapi dev
    ```
 
 ### Frontend Setup
