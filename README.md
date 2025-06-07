@@ -11,7 +11,17 @@ The backend uses `uv` for package management.
 To install the backend dependencies, run the following command in the backend project directory:
 
 ```bash
-uv sync
+uv pip install -r requirements.txt
+```
+
+### First-time Setup for Playwright
+
+After installing dependencies, you need to install Playwright browsers. Activate the virtual environment and run:
+
+```bash
+# On Windows (PowerShell)
+.\.venv\Scripts\activate
+python -m playwright install
 ```
 
 ### Running the Backend
